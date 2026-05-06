@@ -21,6 +21,20 @@ if [[ -z "${TGT_HOST:-}" ]]; then
     --query "Stacks[0].Outputs[?OutputKey=='TargetEndpointAddress'].OutputValue" --output text)
 fi
 
+MYSQL_DEFAULTS_FILE=$(mktemp)
+cleanup() {
+  rm -f "$MYSQL_DEFAULTS_FILE"
+}
+trap cleanup EXIT
+
+cat > "$MYSQL_DEFAULTS_FILE" <<EOF
+[client]
+host=$TGT_HOST
+user=$DB_USER
+password=$DB_PASSWORD
+database=demo
+EOF
+
 QUERIES=(
   "freshness.sql"
   "dau.sql"
@@ -41,6 +55,6 @@ for query in "${QUERIES[@]}"; do
   echo "================================================================"
   echo "$query"
   echo "================================================================"
-  mysql -h "$TGT_HOST" -u "$DB_USER" -p"$DB_PASSWORD" demo -t < "$query_path"
+  mysql --defaults-extra-file="$MYSQL_DEFAULTS_FILE" -t < "$query_path"
   echo
 done
