@@ -1,0 +1,40 @@
+# Local secrets and environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials
+config.local
+
+# AWS generated / local config
+.aws/
+cdk.out/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Logs and generated outputs
+*.log
+outputs/
+tmp/
+temp/
+
+# Large local demo artifacts
+*.webm
+*.mp4
+*.mov
+*.pptx
+*.ppt
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/settings.json

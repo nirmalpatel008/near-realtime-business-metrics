@@ -1,0 +1,67 @@
+# Safe query catalog for the "Ask your dashboard" extension.
+# The query runner maps user questions to these approved queries first.
+
+queries:
+  daily_active_users:
+    description: Daily active users by date.
+    sql_file: analytics/queries/dau.sql
+    example_questions:
+      - What was DAU yesterday?
+      - How many active users did we have this week?
+      - Show active users by day.
+
+  conversion_rate:
+    description: Daily conversion rate from login to completed purchase.
+    sql_file: analytics/queries/conversion_rate.sql
+    example_questions:
+      - What was the conversion rate yesterday?
+      - Did conversion improve this week?
+      - How many login users completed a purchase?
+
+  payment_success_rate:
+    description: Daily payment success rate across payment attempts.
+    sql_file: analytics/queries/payment_success_rate.sql
+    example_questions:
+      - What was payment success rate yesterday?
+      - Are payment failures increasing?
+      - How reliable were payments this week?
+
+  failed_payments_by_reason:
+    description: Failed payment attempts grouped by failure reason.
+    sql_file: analytics/queries/failed_payments_by_reason.sql
+    example_questions:
+      - Show failed payments by reason.
+      - Why are payments failing?
+      - Which failure reason is most common?
+
+  funnel_daily:
+    description: Daily funnel counts by session.
+    sql_file: analytics/queries/funnel_daily.sql
+    example_questions:
+      - Where are users dropping off?
+      - Show the funnel for yesterday.
+      - How many sessions reached purchase completed?
+
+  geo_segmentation:
+    description: Active users and payment success by city.
+    sql_file: analytics/queries/geo_segmentation.sql
+    example_questions:
+      - Which city had the lowest payment success rate?
+      - Which regions drove the most active users?
+      - Where should the product team investigate failures?
+
+  device_segmentation:
+    description: Conversion and payment success by device type and OS.
+    sql_file: analytics/queries/device_segmentation.sql
+    example_questions:
+      - Is Android conversion lower than iOS?
+      - Which device type has the most payment failures?
+      - Compare mobile and web conversion.
+
+  freshness:
+    description: Data freshness by event table.
+    sql_file: analytics/queries/freshness.sql
+    example_questions:
+      - How fresh is the dashboard?
+      - Is the pipeline delayed?
+      - When did the latest event arrive?

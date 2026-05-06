@@ -1,0 +1,24 @@
+# Keep shell scripts portable when edited on Windows.
+.gitattributes text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.sql text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+
+# PowerShell scripts can use Windows line endings.
+*.ps1 text eol=crlf
+
+# Binary assets.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ppt binary
+*.pptx binary
+*.webm binary
+*.mp4 binary
+*.mov binary
