@@ -72,6 +72,18 @@ KEYWORD_HINTS = {
 }
 
 
+def load_dotenv(path: Path = REPO_ROOT / ".env") -> None:
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip())
+
+
 @dataclass
 class CatalogQuery:
     query_id: str
@@ -140,6 +152,7 @@ def match_question(question: str, queries: list[CatalogQuery]) -> MatchResult:
 
 
 def get_connection(args: argparse.Namespace) -> mysql.connector.MySQLConnection:
+    load_dotenv()
     host = args.host or os.getenv("TGT_HOST")
     password = args.password or os.getenv("DB_PASSWORD")
     user = args.user or os.getenv("DB_USER", "admin")
@@ -217,6 +230,7 @@ def list_queries(queries: list[CatalogQuery]) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    load_dotenv()
     parser = argparse.ArgumentParser(
         description="Ask natural-language KPI questions using the approved query catalog."
     )

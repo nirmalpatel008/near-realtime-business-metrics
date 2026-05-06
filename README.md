@@ -112,6 +112,8 @@ docs/
   natural-language-query-guide.md
                               # Amazon Q / local NLQ design
   ask-dashboard-guide.md      # runnable local natural-language KPI CLI
+  streamlit-dashboard-guide.md
+                              # browser dashboard with Ask tab
   github-publishing-checklist.md
                               # secret-safety checklist before publishing
 
@@ -125,6 +127,10 @@ ai/
   ask_dashboard.py            # local KPI question runner
   query_catalog.yaml         # safe KPI query catalog for "Ask your dashboard"
   prompt_templates.md        # optional summary prompt templates
+
+dashboard/
+  app.py                     # Streamlit metrics dashboard
+  db.py                      # database connection helpers
 
 quicksight/
   dashboard-spec.md           # dashboard sheets, visuals, filters
@@ -243,6 +249,16 @@ For the local natural-language query path, see [docs/ask-dashboard-guide.md](doc
 ```bash
 python ai/ask_dashboard.py "How fresh is the dashboard?" --dry-run
 ```
+
+For the browser dashboard, see [docs/streamlit-dashboard-guide.md](docs/streamlit-dashboard-guide.md):
+
+```powershell
+python -m streamlit run dashboard/app.py
+```
+
+The Streamlit dashboard includes an **Ask Your Dashboard** tab. It supports
+natural-language-style questions by matching them to approved KPI queries in
+`ai/query_catalog.yaml`; it does not generate unrestricted SQL.
 
 ## Cost Guard
 
