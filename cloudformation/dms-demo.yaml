@@ -313,6 +313,14 @@ Resources:
         }
 
 Outputs:
+  VpcId:
+    Value: !Ref VPC
+  PublicSubnetAId:
+    Value: !Ref PublicSubnetA
+  PublicSubnetBId:
+    Value: !Ref PublicSubnetB
+  DbSecurityGroupId:
+    Value: !Ref DbSecurityGroup
   SourceEndpointAddress:
     Value: !GetAtt SourceInstance.Endpoint.Address
   TargetEndpointAddress:

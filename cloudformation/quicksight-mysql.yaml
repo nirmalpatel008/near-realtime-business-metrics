@@ -1,0 +1,1269 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Optional QuickSight extension for the near real-time business metrics demo.
+  Creates a QuickSight MySQL data source, direct-query datasets, a dashboard,
+  and an Amazon Q in QuickSight topic. Requires QuickSight to be enabled in the
+  target AWS account and Region.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: dms-demo
+    Description: Prefix for QuickSight asset names.
+
+  AwsAccountId:
+    Type: String
+    AllowedPattern: '^[0-9]{12}$'
+    Description: AWS account ID where QuickSight is enabled.
+
+  QuickSightPrincipalArn:
+    Type: String
+    Default: ''
+    Description: Optional QuickSight user or group ARN that should be granted access to the data source and datasets.
+
+  DbSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: RDS security group ID from the DMS demo stack.
+
+  QuickSightDataSourceCidr:
+    Type: String
+    Default: 52.23.63.224/27
+    Description: QuickSight us-east-1 IP range for data source connectivity.
+
+  TargetEndpointAddress:
+    Type: String
+    Description: Target RDS MySQL endpoint from the DMS demo stack.
+
+  DBName:
+    Type: String
+    Default: demo
+
+  DBMasterUsername:
+    Type: String
+    Default: admin
+
+  DBMasterPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Password for the target RDS MySQL database.
+
+Conditions:
+  HasQuickSightPrincipal: !Not [!Equals [!Ref QuickSightPrincipalArn, '']]
+
+Resources:
+  DbFromQuickSightPublicIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DbSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      CidrIp: !Ref QuickSightDataSourceCidr
+      Description: RDS from QuickSight us-east-1 data source IP range
+
+  QuickSightMySqlDataSource:
+    Type: AWS::QuickSight::DataSource
+    Properties:
+      AwsAccountId: !Ref AwsAccountId
+      DataSourceId: !Sub '${ProjectName}-mysql-target'
+      Name: !Sub '${ProjectName} RDS MySQL Target'
+      Type: MYSQL
+      DataSourceParameters:
+        MySqlParameters:
+          Host: !Ref TargetEndpointAddress
+          Port: 3306
+          Database: !Ref DBName
+      Credentials:
+        CredentialPair:
+          Username: !Ref DBMasterUsername
+          Password: !Ref DBMasterPassword
+      SslProperties:
+        DisableSsl: false
+      Permissions: !If
+        - HasQuickSightPrincipal
+        - - Principal: !Ref QuickSightPrincipalArn
+            Actions:
+              - quicksight:DescribeDataSource
+              - quicksight:DescribeDataSourcePermissions
+              - quicksight:PassDataSource
+              - quicksight:UpdateDataSource
+              - quicksight:DeleteDataSource
+              - quicksight:UpdateDataSourcePermissions
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  OverviewDataSet:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      AwsAccountId: !Ref AwsAccountId
+      DataSetId: !Sub '${ProjectName}-overview'
+      Name: Near Real-Time Metrics Overview
+      ImportMode: DIRECT_QUERY
+      PhysicalTableMap:
+        OverviewSql:
+          CustomSql:
+            DataSourceArn: !GetAtt QuickSightMySqlDataSource.Arn
+            Name: overview_metrics
+            SqlQuery: |
+              SELECT
+                CAST(CURDATE() AS DATETIME) AS metric_date,
+                (SELECT COUNT(DISTINCT customer_id) FROM user_events WHERE DATE(event_ts) = CURDATE()) AS daily_active_users,
+                (SELECT ROUND(100 * COUNT(DISTINCT CASE WHEN event_type = 'purchase_completed' THEN customer_id END) / NULLIF(COUNT(DISTINCT CASE WHEN event_type = 'login' THEN customer_id END), 0), 2) FROM user_events WHERE DATE(event_ts) = CURDATE()) AS conversion_rate_pct,
+                (SELECT ROUND(100 * SUM(CASE WHEN payment_status = 'success' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) FROM payments WHERE DATE(event_ts) = CURDATE()) AS payment_success_rate_pct,
+                (SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE DATE(event_ts) = CURDATE()) AS gross_transaction_value,
+                (SELECT TIMESTAMPDIFF(SECOND, MAX(event_ts), NOW()) FROM user_events) AS freshness_sec
+            Columns:
+              - { Name: metric_date, Type: DATETIME }
+              - { Name: daily_active_users, Type: INTEGER }
+              - { Name: conversion_rate_pct, Type: DECIMAL }
+              - { Name: payment_success_rate_pct, Type: DECIMAL }
+              - { Name: gross_transaction_value, Type: DECIMAL }
+              - { Name: freshness_sec, Type: INTEGER }
+      Permissions: !If
+        - HasQuickSightPrincipal
+        - - Principal: !Ref QuickSightPrincipalArn
+            Actions:
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+              - quicksight:UpdateDataSetPermissions
+        - !Ref AWS::NoValue
+
+  FunnelDataSet:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      AwsAccountId: !Ref AwsAccountId
+      DataSetId: !Sub '${ProjectName}-funnel-daily'
+      Name: Daily Funnel
+      ImportMode: DIRECT_QUERY
+      PhysicalTableMap:
+        FunnelSql:
+          CustomSql:
+            DataSourceArn: !GetAtt QuickSightMySqlDataSource.Arn
+            Name: funnel_daily
+            SqlQuery: |
+              SELECT
+                CAST(DATE(event_ts) AS DATETIME) AS metric_date,
+                COUNT(DISTINCT CASE WHEN event_type = 'login' THEN session_id END) AS login_sessions,
+                COUNT(DISTINCT CASE WHEN event_type = 'merchant_view' THEN session_id END) AS merchant_view_sessions,
+                COUNT(DISTINCT CASE WHEN event_type = 'payment_initiated' THEN session_id END) AS payment_started_sessions,
+                COUNT(DISTINCT CASE WHEN event_type = 'payment_success' THEN session_id END) AS payment_success_sessions,
+                COUNT(DISTINCT CASE WHEN event_type = 'purchase_completed' THEN session_id END) AS purchase_sessions
+              FROM user_events
+              GROUP BY CAST(DATE(event_ts) AS DATETIME)
+            Columns:
+              - { Name: metric_date, Type: DATETIME }
+              - { Name: login_sessions, Type: INTEGER }
+              - { Name: merchant_view_sessions, Type: INTEGER }
+              - { Name: payment_started_sessions, Type: INTEGER }
+              - { Name: payment_success_sessions, Type: INTEGER }
+              - { Name: purchase_sessions, Type: INTEGER }
+      Permissions: !If
+        - HasQuickSightPrincipal
+        - - Principal: !Ref QuickSightPrincipalArn
+            Actions:
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+              - quicksight:UpdateDataSetPermissions
+        - !Ref AWS::NoValue
+
+  LiveTrendDataSet:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      AwsAccountId: !Ref AwsAccountId
+      DataSetId: !Sub '${ProjectName}-live-trend'
+      Name: Live Activity Trend
+      ImportMode: DIRECT_QUERY
+      PhysicalTableMap:
+        LiveTrendSql:
+          CustomSql:
+            DataSourceArn: !GetAtt QuickSightMySqlDataSource.Arn
+            Name: live_activity_trend
+            SqlQuery: |
+              SELECT
+                CAST(DATE_FORMAT(event_ts, '%Y-%m-%d %H:%i:00') AS DATETIME) AS metric_minute,
+                COUNT(DISTINCT customer_id) AS active_users,
+                COUNT(DISTINCT CASE WHEN event_type = 'login' THEN session_id END) AS login_sessions,
+                COUNT(DISTINCT CASE WHEN event_type = 'purchase_completed' THEN session_id END) AS purchase_sessions,
+                ROUND(
+                  100 * COUNT(DISTINCT CASE WHEN event_type = 'purchase_completed' THEN session_id END)
+                  / NULLIF(COUNT(DISTINCT CASE WHEN event_type = 'login' THEN session_id END), 0),
+                  2
+                ) AS conversion_rate_pct
+              FROM user_events
+              WHERE event_ts >= NOW() - INTERVAL 60 MINUTE
+              GROUP BY CAST(DATE_FORMAT(event_ts, '%Y-%m-%d %H:%i:00') AS DATETIME)
+              ORDER BY metric_minute
+            Columns:
+              - { Name: metric_minute, Type: DATETIME }
+              - { Name: active_users, Type: INTEGER }
+              - { Name: login_sessions, Type: INTEGER }
+              - { Name: purchase_sessions, Type: INTEGER }
+              - { Name: conversion_rate_pct, Type: DECIMAL }
+      Permissions: !If
+        - HasQuickSightPrincipal
+        - - Principal: !Ref QuickSightPrincipalArn
+            Actions:
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+              - quicksight:UpdateDataSetPermissions
+        - !Ref AWS::NoValue
+
+  PaymentFailuresDataSet:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      AwsAccountId: !Ref AwsAccountId
+      DataSetId: !Sub '${ProjectName}-payment-failures'
+      Name: Failed Payments by Reason
+      ImportMode: DIRECT_QUERY
+      PhysicalTableMap:
+        PaymentFailuresSql:
+          CustomSql:
+            DataSourceArn: !GetAtt QuickSightMySqlDataSource.Arn
+            Name: payment_failures
+            SqlQuery: |
+              SELECT
+                CAST(DATE(event_ts) AS DATETIME) AS metric_date,
+                COALESCE(failure_reason, 'UNKNOWN') AS failure_reason,
+                payment_method,
+                COUNT(*) AS failed_payments,
+                ROUND(AVG(processor_latency_ms), 0) AS avg_processor_latency_ms
+              FROM payments
+              WHERE payment_status = 'failed'
+              GROUP BY CAST(DATE(event_ts) AS DATETIME), COALESCE(failure_reason, 'UNKNOWN'), payment_method
+            Columns:
+              - { Name: metric_date, Type: DATETIME }
+              - { Name: failure_reason, Type: STRING }
+              - { Name: payment_method, Type: STRING }
+              - { Name: failed_payments, Type: INTEGER }
+              - { Name: avg_processor_latency_ms, Type: DECIMAL }
+      Permissions: !If
+        - HasQuickSightPrincipal
+        - - Principal: !Ref QuickSightPrincipalArn
+            Actions:
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+              - quicksight:UpdateDataSetPermissions
+        - !Ref AWS::NoValue
+
+  GeoDataSet:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      AwsAccountId: !Ref AwsAccountId
+      DataSetId: !Sub '${ProjectName}-geo-segmentation'
+      Name: Geographic Segmentation
+      ImportMode: DIRECT_QUERY
+      PhysicalTableMap:
+        GeoSql:
+          CustomSql:
+            DataSourceArn: !GetAtt QuickSightMySqlDataSource.Arn
+            Name: geo_segmentation
+            SqlQuery: |
+              SELECT
+                CAST(DATE(ue.event_ts) AS DATETIME) AS metric_date,
+                r.country,
+                r.state,
+                r.city,
+                COUNT(DISTINCT ue.customer_id) AS active_users,
+                COUNT(p.payment_id) AS payment_attempts,
+                SUM(CASE WHEN p.payment_status = 'success' THEN 1 ELSE 0 END) AS successful_payments,
+                ROUND(100 * SUM(CASE WHEN p.payment_status = 'success' THEN 1 ELSE 0 END) / NULLIF(COUNT(p.payment_id), 0), 2) AS payment_success_rate_pct
+              FROM user_events ue
+              JOIN customers c ON ue.customer_id = c.customer_id
+              JOIN regions r ON c.region_id = r.region_id
+              LEFT JOIN payments p ON ue.customer_id = p.customer_id AND DATE(ue.event_ts) = DATE(p.event_ts)
+              GROUP BY CAST(DATE(ue.event_ts) AS DATETIME), r.country, r.state, r.city
+            Columns:
+              - { Name: metric_date, Type: DATETIME }
+              - { Name: country, Type: STRING }
+              - { Name: state, Type: STRING }
+              - { Name: city, Type: STRING }
+              - { Name: active_users, Type: INTEGER }
+              - { Name: payment_attempts, Type: INTEGER }
+              - { Name: successful_payments, Type: INTEGER }
+              - { Name: payment_success_rate_pct, Type: DECIMAL }
+      Permissions: !If
+        - HasQuickSightPrincipal
+        - - Principal: !Ref QuickSightPrincipalArn
+            Actions:
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+              - quicksight:UpdateDataSetPermissions
+        - !Ref AWS::NoValue
+
+  DeviceDataSet:
+    Type: AWS::QuickSight::DataSet
+    Properties:
+      AwsAccountId: !Ref AwsAccountId
+      DataSetId: !Sub '${ProjectName}-device-segmentation'
+      Name: Device Segmentation
+      ImportMode: DIRECT_QUERY
+      PhysicalTableMap:
+        DeviceSql:
+          CustomSql:
+            DataSourceArn: !GetAtt QuickSightMySqlDataSource.Arn
+            Name: device_segmentation
+            SqlQuery: |
+              SELECT
+                CAST(DATE(ue.event_ts) AS DATETIME) AS metric_date,
+                d.device_type,
+                d.os,
+                COUNT(DISTINCT CASE WHEN ue.event_type = 'login' THEN ue.customer_id END) AS login_users,
+                COUNT(DISTINCT CASE WHEN ue.event_type = 'purchase_completed' THEN ue.customer_id END) AS converted_users,
+                ROUND(100 * COUNT(DISTINCT CASE WHEN ue.event_type = 'purchase_completed' THEN ue.customer_id END) / NULLIF(COUNT(DISTINCT CASE WHEN ue.event_type = 'login' THEN ue.customer_id END), 0), 2) AS conversion_rate_pct
+              FROM user_events ue
+              JOIN devices d ON ue.device_id = d.device_id
+              GROUP BY CAST(DATE(ue.event_ts) AS DATETIME), d.device_type, d.os
+            Columns:
+              - { Name: metric_date, Type: DATETIME }
+              - { Name: device_type, Type: STRING }
+              - { Name: os, Type: STRING }
+              - { Name: login_users, Type: INTEGER }
+              - { Name: converted_users, Type: INTEGER }
+              - { Name: conversion_rate_pct, Type: DECIMAL }
+      Permissions: !If
+        - HasQuickSightPrincipal
+        - - Principal: !Ref QuickSightPrincipalArn
+            Actions:
+              - quicksight:DescribeDataSet
+              - quicksight:DescribeDataSetPermissions
+              - quicksight:PassDataSet
+              - quicksight:DescribeIngestion
+              - quicksight:ListIngestions
+              - quicksight:UpdateDataSet
+              - quicksight:DeleteDataSet
+              - quicksight:CreateIngestion
+              - quicksight:CancelIngestion
+              - quicksight:UpdateDataSetPermissions
+        - !Ref AWS::NoValue
+
+  BusinessMetricsTopic:
+    Type: AWS::QuickSight::Topic
+    Properties:
+      AwsAccountId: !Ref AwsAccountId
+      TopicId: !Sub '${ProjectName}-business-metrics-topic'
+      Name: Near Real-Time Business Metrics
+      Description: Natural-language topic for DAU, conversion, funnel, payments, freshness, geography, and device KPIs.
+      UserExperienceVersion: NEW_READER_EXPERIENCE
+      DataSets:
+        - DatasetArn: !GetAtt OverviewDataSet.Arn
+          DatasetName: Overview metrics
+          DatasetDescription: Executive KPIs for active users, conversion, payment success, value, and freshness.
+          Columns:
+            - { ColumnName: metric_date, ColumnFriendlyName: metric date, ColumnDataRole: DIMENSION, IsIncludedInTopic: true, TimeGranularity: DAY }
+            - { ColumnName: daily_active_users, ColumnFriendlyName: daily active users, ColumnSynonyms: [DAU, active users], ColumnDataRole: MEASURE, Aggregation: MAX, IsIncludedInTopic: true }
+            - { ColumnName: conversion_rate_pct, ColumnFriendlyName: conversion rate, ColumnSynonyms: [conversion, purchase conversion], ColumnDataRole: MEASURE, Aggregation: MAX, IsIncludedInTopic: true }
+            - { ColumnName: payment_success_rate_pct, ColumnFriendlyName: payment success rate, ColumnSynonyms: [payment reliability, successful payments], ColumnDataRole: MEASURE, Aggregation: MAX, IsIncludedInTopic: true }
+            - { ColumnName: gross_transaction_value, ColumnFriendlyName: gross transaction value, ColumnSynonyms: [GTV, transaction value], ColumnDataRole: MEASURE, Aggregation: SUM, IsIncludedInTopic: true }
+            - { ColumnName: freshness_sec, ColumnFriendlyName: freshness seconds, ColumnSynonyms: [freshness, lag, data delay], ColumnDataRole: MEASURE, Aggregation: MIN, IsIncludedInTopic: true }
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  BusinessMetricsAnalysis:
+    Type: AWS::QuickSight::Analysis
+    Properties:
+      AwsAccountId: !Ref AwsAccountId
+      AnalysisId: !Sub '${ProjectName}-business-metrics-analysis'
+      Name: Near Real-Time Business Metrics Analysis
+      Definition:
+        DataSetIdentifierDeclarations:
+          - Identifier: overview
+            DataSetArn: !GetAtt OverviewDataSet.Arn
+          - Identifier: live_trend
+            DataSetArn: !GetAtt LiveTrendDataSet.Arn
+        Sheets:
+          - SheetId: analysis-overview
+            Name: Executive Overview
+            Title: Executive Overview
+            ContentType: INTERACTIVE
+            Visuals:
+              - KPIVisual:
+                  VisualId: analysis-dau-kpi
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Daily Active Users
+                  ChartConfiguration:
+                    FieldWells:
+                      Values:
+                        - NumericalMeasureField:
+                            FieldId: analysis-dau-kpi-value
+                            Column:
+                              DataSetIdentifier: overview
+                              ColumnName: daily_active_users
+                            AggregationFunction:
+                              SimpleNumericalAggregation: MAX
+              - KPIVisual:
+                  VisualId: analysis-conversion-kpi
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Conversion Rate
+                  ChartConfiguration:
+                    FieldWells:
+                      Values:
+                        - NumericalMeasureField:
+                            FieldId: analysis-conversion-kpi-value
+                            Column:
+                              DataSetIdentifier: overview
+                              ColumnName: conversion_rate_pct
+                            AggregationFunction:
+                              SimpleNumericalAggregation: MAX
+              - KPIVisual:
+                  VisualId: analysis-payment-success-kpi
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Payment Success Rate
+                  ChartConfiguration:
+                    FieldWells:
+                      Values:
+                        - NumericalMeasureField:
+                            FieldId: analysis-payment-success-kpi-value
+                            Column:
+                              DataSetIdentifier: overview
+                              ColumnName: payment_success_rate_pct
+                            AggregationFunction:
+                              SimpleNumericalAggregation: MAX
+              - KPIVisual:
+                  VisualId: analysis-freshness-kpi
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Data Freshness Seconds
+                  ChartConfiguration:
+                    FieldWells:
+                      Values:
+                        - NumericalMeasureField:
+                            FieldId: analysis-freshness-kpi-value
+                            Column:
+                              DataSetIdentifier: overview
+                              ColumnName: freshness_sec
+                            AggregationFunction:
+                              SimpleNumericalAggregation: MIN
+              - BarChartVisual:
+                  VisualId: analysis-live-activity-bar
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Live Activity Trend by Minute
+                  ChartConfiguration:
+                    Orientation: VERTICAL
+                    BarsArrangement: CLUSTERED
+                    FieldWells:
+                      BarChartAggregatedFieldWells:
+                        Category:
+                          - DateDimensionField:
+                              FieldId: analysis-live-minute
+                              Column:
+                                DataSetIdentifier: live_trend
+                                ColumnName: metric_minute
+                              DateGranularity: MINUTE
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: analysis-live-active-users
+                              Column:
+                                DataSetIdentifier: live_trend
+                                ColumnName: active_users
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: analysis-live-purchases
+                              Column:
+                                DataSetIdentifier: live_trend
+                                ColumnName: purchase_sessions
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+              - TableVisual:
+                  VisualId: analysis-overview-table
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Executive KPI Summary
+                  ChartConfiguration:
+                    FieldWells:
+                      TableAggregatedFieldWells:
+                        GroupBy:
+                          - DateDimensionField:
+                              FieldId: analysis-metric-date
+                              Column:
+                                DataSetIdentifier: overview
+                                ColumnName: metric_date
+                              DateGranularity: DAY
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: analysis-dau
+                              Column:
+                                DataSetIdentifier: overview
+                                ColumnName: daily_active_users
+                              AggregationFunction:
+                                SimpleNumericalAggregation: MAX
+                          - NumericalMeasureField:
+                              FieldId: analysis-conversion
+                              Column:
+                                DataSetIdentifier: overview
+                                ColumnName: conversion_rate_pct
+                              AggregationFunction:
+                                SimpleNumericalAggregation: MAX
+                          - NumericalMeasureField:
+                              FieldId: analysis-payment-success
+                              Column:
+                                DataSetIdentifier: overview
+                                ColumnName: payment_success_rate_pct
+                              AggregationFunction:
+                                SimpleNumericalAggregation: MAX
+                          - NumericalMeasureField:
+                              FieldId: analysis-freshness
+                              Column:
+                                DataSetIdentifier: overview
+                                ColumnName: freshness_sec
+                              AggregationFunction:
+                                SimpleNumericalAggregation: MIN
+            Layouts:
+              - Configuration:
+                  GridLayout:
+                    Elements:
+                      - ElementId: analysis-dau-kpi
+                        ElementType: VISUAL
+                        ColumnIndex: 0
+                        ColumnSpan: 9
+                        RowIndex: 0
+                        RowSpan: 6
+                      - ElementId: analysis-conversion-kpi
+                        ElementType: VISUAL
+                        ColumnIndex: 9
+                        ColumnSpan: 9
+                        RowIndex: 0
+                        RowSpan: 6
+                      - ElementId: analysis-payment-success-kpi
+                        ElementType: VISUAL
+                        ColumnIndex: 18
+                        ColumnSpan: 9
+                        RowIndex: 0
+                        RowSpan: 6
+                      - ElementId: analysis-freshness-kpi
+                        ElementType: VISUAL
+                        ColumnIndex: 27
+                        ColumnSpan: 9
+                        RowIndex: 0
+                        RowSpan: 6
+                      - ElementId: analysis-overview-table
+                        ElementType: VISUAL
+                        ColumnIndex: 0
+                        ColumnSpan: 36
+                        RowIndex: 18
+                        RowSpan: 10
+                      - ElementId: analysis-live-activity-bar
+                        ElementType: VISUAL
+                        ColumnIndex: 0
+                        ColumnSpan: 36
+                        RowIndex: 6
+                        RowSpan: 12
+      Permissions: !If
+        - HasQuickSightPrincipal
+        - - Principal: !Ref QuickSightPrincipalArn
+            Actions:
+              - quicksight:RestoreAnalysis
+              - quicksight:UpdateAnalysisPermissions
+              - quicksight:DeleteAnalysis
+              - quicksight:DescribeAnalysisPermissions
+              - quicksight:QueryAnalysis
+              - quicksight:DescribeAnalysis
+              - quicksight:UpdateAnalysis
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  BusinessMetricsDashboard:
+    Type: AWS::QuickSight::Dashboard
+    Properties:
+      AwsAccountId: !Ref AwsAccountId
+      DashboardId: !Sub '${ProjectName}-business-metrics-dashboard'
+      Name: Near Real-Time Business Metrics
+      VersionDescription: Initial CloudFormation-managed dashboard
+      ValidationStrategy:
+        Mode: LENIENT
+      Definition:
+        DataSetIdentifierDeclarations:
+          - Identifier: overview
+            DataSetArn: !GetAtt OverviewDataSet.Arn
+          - Identifier: funnel
+            DataSetArn: !GetAtt FunnelDataSet.Arn
+          - Identifier: live_trend
+            DataSetArn: !GetAtt LiveTrendDataSet.Arn
+          - Identifier: payment_failures
+            DataSetArn: !GetAtt PaymentFailuresDataSet.Arn
+          - Identifier: geo
+            DataSetArn: !GetAtt GeoDataSet.Arn
+          - Identifier: device
+            DataSetArn: !GetAtt DeviceDataSet.Arn
+        Sheets:
+          - SheetId: executive-overview
+            Name: Executive Overview
+            Title: Executive Overview
+            ContentType: INTERACTIVE
+            Visuals:
+              - KPIVisual:
+                  VisualId: dau-kpi
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Daily Active Users
+                  ChartConfiguration:
+                    FieldWells:
+                      Values:
+                        - NumericalMeasureField:
+                            FieldId: dau-kpi-value
+                            Column:
+                              DataSetIdentifier: overview
+                              ColumnName: daily_active_users
+                            AggregationFunction:
+                              SimpleNumericalAggregation: MAX
+              - KPIVisual:
+                  VisualId: conversion-kpi
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Conversion Rate
+                  ChartConfiguration:
+                    FieldWells:
+                      Values:
+                        - NumericalMeasureField:
+                            FieldId: conversion-kpi-value
+                            Column:
+                              DataSetIdentifier: overview
+                              ColumnName: conversion_rate_pct
+                            AggregationFunction:
+                              SimpleNumericalAggregation: MAX
+              - KPIVisual:
+                  VisualId: payment-success-kpi
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Payment Success Rate
+                  ChartConfiguration:
+                    FieldWells:
+                      Values:
+                        - NumericalMeasureField:
+                            FieldId: payment-success-kpi-value
+                            Column:
+                              DataSetIdentifier: overview
+                              ColumnName: payment_success_rate_pct
+                            AggregationFunction:
+                              SimpleNumericalAggregation: MAX
+              - KPIVisual:
+                  VisualId: freshness-kpi
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Data Freshness Seconds
+                  ChartConfiguration:
+                    FieldWells:
+                      Values:
+                        - NumericalMeasureField:
+                            FieldId: freshness-kpi-value
+                            Column:
+                              DataSetIdentifier: overview
+                              ColumnName: freshness_sec
+                            AggregationFunction:
+                              SimpleNumericalAggregation: MIN
+              - BarChartVisual:
+                  VisualId: live-activity-bar
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Live Activity Trend by Minute
+                  ChartConfiguration:
+                    Orientation: VERTICAL
+                    BarsArrangement: CLUSTERED
+                    FieldWells:
+                      BarChartAggregatedFieldWells:
+                        Category:
+                          - DateDimensionField:
+                              FieldId: live-minute
+                              Column:
+                                DataSetIdentifier: live_trend
+                                ColumnName: metric_minute
+                              DateGranularity: MINUTE
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: live-active-users
+                              Column:
+                                DataSetIdentifier: live_trend
+                                ColumnName: active_users
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: live-purchases
+                              Column:
+                                DataSetIdentifier: live_trend
+                                ColumnName: purchase_sessions
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+              - TableVisual:
+                  VisualId: overview-kpis-table
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Executive KPI Summary
+                  ChartConfiguration:
+                    FieldWells:
+                      TableAggregatedFieldWells:
+                        GroupBy:
+                          - DateDimensionField:
+                              FieldId: overview-metric-date
+                              Column:
+                                DataSetIdentifier: overview
+                                ColumnName: metric_date
+                              DateGranularity: DAY
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: overview-dau
+                              Column:
+                                DataSetIdentifier: overview
+                                ColumnName: daily_active_users
+                              AggregationFunction:
+                                SimpleNumericalAggregation: MAX
+                          - NumericalMeasureField:
+                              FieldId: overview-conversion
+                              Column:
+                                DataSetIdentifier: overview
+                                ColumnName: conversion_rate_pct
+                              AggregationFunction:
+                                SimpleNumericalAggregation: MAX
+                          - NumericalMeasureField:
+                              FieldId: overview-payment-success
+                              Column:
+                                DataSetIdentifier: overview
+                                ColumnName: payment_success_rate_pct
+                              AggregationFunction:
+                                SimpleNumericalAggregation: MAX
+                          - NumericalMeasureField:
+                              FieldId: overview-gtv
+                              Column:
+                                DataSetIdentifier: overview
+                                ColumnName: gross_transaction_value
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: overview-freshness
+                              Column:
+                                DataSetIdentifier: overview
+                                ColumnName: freshness_sec
+                              AggregationFunction:
+                                SimpleNumericalAggregation: MIN
+            Layouts:
+              - Configuration:
+                  GridLayout:
+                    Elements:
+                      - ElementId: dau-kpi
+                        ElementType: VISUAL
+                        ColumnIndex: 0
+                        ColumnSpan: 9
+                        RowIndex: 0
+                        RowSpan: 6
+                      - ElementId: conversion-kpi
+                        ElementType: VISUAL
+                        ColumnIndex: 9
+                        ColumnSpan: 9
+                        RowIndex: 0
+                        RowSpan: 6
+                      - ElementId: payment-success-kpi
+                        ElementType: VISUAL
+                        ColumnIndex: 18
+                        ColumnSpan: 9
+                        RowIndex: 0
+                        RowSpan: 6
+                      - ElementId: freshness-kpi
+                        ElementType: VISUAL
+                        ColumnIndex: 27
+                        ColumnSpan: 9
+                        RowIndex: 0
+                        RowSpan: 6
+                      - ElementId: overview-kpis-table
+                        ElementType: VISUAL
+                        ColumnIndex: 0
+                        ColumnSpan: 36
+                        RowIndex: 18
+                        RowSpan: 10
+                      - ElementId: live-activity-bar
+                        ElementType: VISUAL
+                        ColumnIndex: 0
+                        ColumnSpan: 36
+                        RowIndex: 6
+                        RowSpan: 12
+          - SheetId: funnel-analysis
+            Name: Funnel Analysis
+            Title: Funnel Analysis
+            ContentType: INTERACTIVE
+            Visuals:
+              - BarChartVisual:
+                  VisualId: funnel-bar
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Funnel Step Counts
+                  ChartConfiguration:
+                    Orientation: VERTICAL
+                    BarsArrangement: CLUSTERED
+                    FieldWells:
+                      BarChartAggregatedFieldWells:
+                        Category:
+                          - DateDimensionField:
+                              FieldId: funnel-bar-date
+                              Column:
+                                DataSetIdentifier: funnel
+                                ColumnName: metric_date
+                              DateGranularity: DAY
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: funnel-bar-login
+                              Column:
+                                DataSetIdentifier: funnel
+                                ColumnName: login_sessions
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: funnel-bar-merchant-view
+                              Column:
+                                DataSetIdentifier: funnel
+                                ColumnName: merchant_view_sessions
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: funnel-bar-payment-started
+                              Column:
+                                DataSetIdentifier: funnel
+                                ColumnName: payment_started_sessions
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: funnel-bar-payment-success
+                              Column:
+                                DataSetIdentifier: funnel
+                                ColumnName: payment_success_sessions
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: funnel-bar-purchase
+                              Column:
+                                DataSetIdentifier: funnel
+                                ColumnName: purchase_sessions
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+              - TableVisual:
+                  VisualId: funnel-table
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Daily Funnel Counts
+                  ChartConfiguration:
+                    FieldWells:
+                      TableAggregatedFieldWells:
+                        GroupBy:
+                          - DateDimensionField:
+                              FieldId: funnel-metric-date
+                              Column:
+                                DataSetIdentifier: funnel
+                                ColumnName: metric_date
+                              DateGranularity: DAY
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: funnel-login
+                              Column:
+                                DataSetIdentifier: funnel
+                                ColumnName: login_sessions
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: funnel-merchant-view
+                              Column:
+                                DataSetIdentifier: funnel
+                                ColumnName: merchant_view_sessions
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: funnel-payment-started
+                              Column:
+                                DataSetIdentifier: funnel
+                                ColumnName: payment_started_sessions
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: funnel-payment-success
+                              Column:
+                                DataSetIdentifier: funnel
+                                ColumnName: payment_success_sessions
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: funnel-purchase
+                              Column:
+                                DataSetIdentifier: funnel
+                                ColumnName: purchase_sessions
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+            Layouts:
+              - Configuration:
+                  GridLayout:
+                    Elements:
+                      - ElementId: funnel-bar
+                        ElementType: VISUAL
+                        ColumnIndex: 0
+                        ColumnSpan: 36
+                        RowIndex: 0
+                        RowSpan: 12
+                      - ElementId: funnel-table
+                        ElementType: VISUAL
+                        ColumnIndex: 0
+                        ColumnSpan: 36
+                        RowIndex: 12
+                        RowSpan: 12
+          - SheetId: payment-reliability
+            Name: Payment Reliability
+            Title: Payment Reliability
+            ContentType: INTERACTIVE
+            Visuals:
+              - BarChartVisual:
+                  VisualId: payment-failures-bar
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Failed Payments by Reason
+                  ChartConfiguration:
+                    Orientation: VERTICAL
+                    BarsArrangement: STACKED
+                    FieldWells:
+                      BarChartAggregatedFieldWells:
+                        Category:
+                          - CategoricalDimensionField:
+                              FieldId: payment-failure-bar-reason
+                              Column:
+                                DataSetIdentifier: payment_failures
+                                ColumnName: failure_reason
+                        Colors:
+                          - CategoricalDimensionField:
+                              FieldId: payment-failure-bar-method
+                              Column:
+                                DataSetIdentifier: payment_failures
+                                ColumnName: payment_method
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: payment-failure-bar-count
+                              Column:
+                                DataSetIdentifier: payment_failures
+                                ColumnName: failed_payments
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+              - TableVisual:
+                  VisualId: payment-failures-table
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Failed Payments by Reason
+                  ChartConfiguration:
+                    FieldWells:
+                      TableAggregatedFieldWells:
+                        GroupBy:
+                          - DateDimensionField:
+                              FieldId: payment-failure-date
+                              Column:
+                                DataSetIdentifier: payment_failures
+                                ColumnName: metric_date
+                              DateGranularity: DAY
+                          - CategoricalDimensionField:
+                              FieldId: payment-failure-reason
+                              Column:
+                                DataSetIdentifier: payment_failures
+                                ColumnName: failure_reason
+                          - CategoricalDimensionField:
+                              FieldId: payment-method
+                              Column:
+                                DataSetIdentifier: payment_failures
+                                ColumnName: payment_method
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: failed-payments
+                              Column:
+                                DataSetIdentifier: payment_failures
+                                ColumnName: failed_payments
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: avg-processor-latency
+                              Column:
+                                DataSetIdentifier: payment_failures
+                                ColumnName: avg_processor_latency_ms
+                              AggregationFunction:
+                                SimpleNumericalAggregation: AVERAGE
+            Layouts:
+              - Configuration:
+                  GridLayout:
+                    Elements:
+                      - ElementId: payment-failures-bar
+                        ElementType: VISUAL
+                        ColumnIndex: 0
+                        ColumnSpan: 36
+                        RowIndex: 0
+                        RowSpan: 12
+                      - ElementId: payment-failures-table
+                        ElementType: VISUAL
+                        ColumnIndex: 0
+                        ColumnSpan: 36
+                        RowIndex: 12
+                        RowSpan: 12
+          - SheetId: segments
+            Name: Segments
+            Title: Segments
+            ContentType: INTERACTIVE
+            Visuals:
+              - BarChartVisual:
+                  VisualId: geo-active-users-bar
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Active Users by City
+                  ChartConfiguration:
+                    Orientation: VERTICAL
+                    BarsArrangement: CLUSTERED
+                    FieldWells:
+                      BarChartAggregatedFieldWells:
+                        Category:
+                          - CategoricalDimensionField:
+                              FieldId: geo-bar-city
+                              Column:
+                                DataSetIdentifier: geo
+                                ColumnName: city
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: geo-bar-active-users
+                              Column:
+                                DataSetIdentifier: geo
+                                ColumnName: active_users
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+              - BarChartVisual:
+                  VisualId: device-conversion-bar
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Conversion Rate by Device and OS
+                  ChartConfiguration:
+                    Orientation: VERTICAL
+                    BarsArrangement: CLUSTERED
+                    FieldWells:
+                      BarChartAggregatedFieldWells:
+                        Category:
+                          - CategoricalDimensionField:
+                              FieldId: device-bar-type
+                              Column:
+                                DataSetIdentifier: device
+                                ColumnName: device_type
+                        Colors:
+                          - CategoricalDimensionField:
+                              FieldId: device-bar-os
+                              Column:
+                                DataSetIdentifier: device
+                                ColumnName: os
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: device-bar-conversion-rate
+                              Column:
+                                DataSetIdentifier: device
+                                ColumnName: conversion_rate_pct
+                              AggregationFunction:
+                                SimpleNumericalAggregation: AVERAGE
+              - TableVisual:
+                  VisualId: geo-segments-table
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Geographic Segmentation
+                  ChartConfiguration:
+                    FieldWells:
+                      TableAggregatedFieldWells:
+                        GroupBy:
+                          - CategoricalDimensionField:
+                              FieldId: geo-country
+                              Column:
+                                DataSetIdentifier: geo
+                                ColumnName: country
+                          - CategoricalDimensionField:
+                              FieldId: geo-state
+                              Column:
+                                DataSetIdentifier: geo
+                                ColumnName: state
+                          - CategoricalDimensionField:
+                              FieldId: geo-city
+                              Column:
+                                DataSetIdentifier: geo
+                                ColumnName: city
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: geo-active-users
+                              Column:
+                                DataSetIdentifier: geo
+                                ColumnName: active_users
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: geo-payment-success-rate
+                              Column:
+                                DataSetIdentifier: geo
+                                ColumnName: payment_success_rate_pct
+                              AggregationFunction:
+                                SimpleNumericalAggregation: AVERAGE
+              - TableVisual:
+                  VisualId: device-segments-table
+                  Title:
+                    Visibility: VISIBLE
+                    FormatText:
+                      PlainText: Device Segmentation
+                  ChartConfiguration:
+                    FieldWells:
+                      TableAggregatedFieldWells:
+                        GroupBy:
+                          - CategoricalDimensionField:
+                              FieldId: device-type
+                              Column:
+                                DataSetIdentifier: device
+                                ColumnName: device_type
+                          - CategoricalDimensionField:
+                              FieldId: device-os
+                              Column:
+                                DataSetIdentifier: device
+                                ColumnName: os
+                        Values:
+                          - NumericalMeasureField:
+                              FieldId: device-login-users
+                              Column:
+                                DataSetIdentifier: device
+                                ColumnName: login_users
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: device-converted-users
+                              Column:
+                                DataSetIdentifier: device
+                                ColumnName: converted_users
+                              AggregationFunction:
+                                SimpleNumericalAggregation: SUM
+                          - NumericalMeasureField:
+                              FieldId: device-conversion-rate
+                              Column:
+                                DataSetIdentifier: device
+                                ColumnName: conversion_rate_pct
+                              AggregationFunction:
+                                SimpleNumericalAggregation: AVERAGE
+            Layouts:
+              - Configuration:
+                  GridLayout:
+                    Elements:
+                      - ElementId: geo-active-users-bar
+                        ElementType: VISUAL
+                        ColumnIndex: 0
+                        ColumnSpan: 18
+                        RowIndex: 0
+                        RowSpan: 12
+                      - ElementId: device-conversion-bar
+                        ElementType: VISUAL
+                        ColumnIndex: 18
+                        ColumnSpan: 18
+                        RowIndex: 0
+                        RowSpan: 12
+                      - ElementId: geo-segments-table
+                        ElementType: VISUAL
+                        ColumnIndex: 0
+                        ColumnSpan: 18
+                        RowIndex: 12
+                        RowSpan: 12
+                      - ElementId: device-segments-table
+                        ElementType: VISUAL
+                        ColumnIndex: 18
+                        ColumnSpan: 18
+                        RowIndex: 12
+                        RowSpan: 12
+      Permissions: !If
+        - HasQuickSightPrincipal
+        - - Principal: !Ref QuickSightPrincipalArn
+            Actions:
+              - quicksight:DescribeDashboard
+              - quicksight:DescribeDashboardPermissions
+              - quicksight:ListDashboardVersions
+              - quicksight:QueryDashboard
+              - quicksight:UpdateDashboard
+              - quicksight:DeleteDashboard
+              - quicksight:UpdateDashboardPermissions
+              - quicksight:UpdateDashboardPublishedVersion
+        - !Ref AWS::NoValue
+      DashboardPublishOptions:
+        AdHocFilteringOption:
+          AvailabilityStatus: ENABLED
+        ExportToCSVOption:
+          AvailabilityStatus: ENABLED
+        SheetControlsOption:
+          VisibilityState: EXPANDED
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  QuickSightDataSourceArn:
+    Value: !GetAtt QuickSightMySqlDataSource.Arn
+  OverviewDataSetArn:
+    Value: !GetAtt OverviewDataSet.Arn
+  FunnelDataSetArn:
+    Value: !GetAtt FunnelDataSet.Arn
+  LiveTrendDataSetArn:
+    Value: !GetAtt LiveTrendDataSet.Arn
+  PaymentFailuresDataSetArn:
+    Value: !GetAtt PaymentFailuresDataSet.Arn
+  GeoDataSetArn:
+    Value: !GetAtt GeoDataSet.Arn
+  DeviceDataSetArn:
+    Value: !GetAtt DeviceDataSet.Arn
+  BusinessMetricsDashboardArn:
+    Value: !GetAtt BusinessMetricsDashboard.Arn
+  BusinessMetricsAnalysisArn:
+    Value: !GetAtt BusinessMetricsAnalysis.Arn
+  QuickSightConsoleUrl:
+    Value: !Sub 'https://${AWS::Region}.quicksight.aws.amazon.com/sn/start'

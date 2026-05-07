@@ -30,20 +30,49 @@ while true; do
   mysql -h "$SRC_HOST" -u "$DB_USER" -p"$DB_PASSWORD" demo -N -e "
     START TRANSACTION;
 
-    SET @customer_id := 1 + FLOOR(RAND() * 1000);
-    SET @merchant_id := 1 + FLOOR(RAND() * 200);
-    SET @device_id := (
-      SELECT device_id
-      FROM devices
-      WHERE customer_id = @customer_id
-      ORDER BY RAND()
-      LIMIT 1
+    SET @new_customer_suffix := CONCAT(UNIX_TIMESTAMP(NOW(6)), '_', CONNECTION_ID(), '_', FLOOR(RAND() * 1000000));
+    SET @region_id := 1 + FLOOR(RAND() * 8);
+    SET @signup_ts := NOW(6);
+
+    INSERT INTO customers (full_name, email_hash, customer_segment, signup_ts, region_id, kyc_status, is_active)
+    VALUES (
+      CONCAT('Live Customer ', @new_customer_suffix),
+      SHA2(CONCAT('live_customer_', @new_customer_suffix, '@example.test'), 256),
+      ELT(1 + FLOOR(RAND() * 4), 'mass', 'affluent', 'student', 'smb'),
+      @signup_ts,
+      @region_id,
+      'verified',
+      TRUE
     );
-    SET @device_id := COALESCE(@device_id, 1 + FLOOR(RAND() * 1200));
+
+    SET @customer_id := LAST_INSERT_ID();
+
+    INSERT INTO accounts (customer_id, account_type, balance, currency, opened_ts, status)
+    VALUES (
+      @customer_id,
+      ELT(1 + FLOOR(RAND() * 3), 'savings', 'wallet', 'credit'),
+      ROUND(1000 + RAND() * 100000, 2),
+      'INR',
+      @signup_ts,
+      'active'
+    );
+
+    INSERT INTO devices (customer_id, device_type, os, app_version, browser, first_seen_ts)
+    VALUES (
+      @customer_id,
+      ELT(1 + FLOOR(RAND() * 3), 'mobile', 'web', 'tablet'),
+      ELT(1 + FLOOR(RAND() * 4), 'Android', 'iOS', 'Windows', 'macOS'),
+      CONCAT('6.', FLOOR(RAND() * 9), '.', FLOOR(RAND() * 20)),
+      ELT(1 + FLOOR(RAND() * 4), 'Chrome', 'Safari', 'Edge', 'Firefox'),
+      @signup_ts
+    );
+
+    SET @merchant_id := 1 + FLOOR(RAND() * 200);
+    SET @device_id := LAST_INSERT_ID();
     SET @amount := ROUND(50 + RAND() * 25000, 2);
     SET @channel := ELT(1 + FLOOR(RAND() * 3), 'mobile_app', 'web', 'partner_api');
     SET @payment_method := ELT(1 + FLOOR(RAND() * 5), 'upi', 'card', 'netbanking', 'wallet', 'bnpl');
-    SET @is_success := RAND() >= 0.12;
+    SET @is_success := RAND() >= 0.03;
     SET @event_ts := NOW(6);
     SET @session_id := CONCAT('live_', @customer_id, '_', UNIX_TIMESTAMP(@event_ts), '_', FLOOR(RAND() * 100000));
 

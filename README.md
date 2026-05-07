@@ -109,6 +109,8 @@ docs/
                               # end-to-end AWS validation checklist
   quicksight-dashboard-guide.md
                               # optional AWS-native dashboard path
+  quicksight-cloudformation-guide.md
+                              # optional QuickSight CFN assets and teardown
   natural-language-query-guide.md
                               # Amazon Q / local NLQ design
   ask-dashboard-guide.md      # runnable local natural-language KPI CLI
@@ -243,6 +245,12 @@ Use [docs/demo-storyline.md](docs/demo-storyline.md), [docs/workshop-flow.md](do
 Architecture diagrams are in [docs/diagrams.md](docs/diagrams.md). Article drafts are in [articles](articles).
 
 For the optional AWS-native dashboard path, see [docs/quicksight-dashboard-guide.md](docs/quicksight-dashboard-guide.md), [quicksight/dashboard-spec.md](quicksight/dashboard-spec.md), and [docs/natural-language-query-guide.md](docs/natural-language-query-guide.md).
+
+For CloudFormation-managed QuickSight dashboard, datasets, data source, security group ingress, and topic creation, see [docs/quicksight-cloudformation-guide.md](docs/quicksight-cloudformation-guide.md):
+
+```bash
+./scripts/deploy-quicksight.sh
+```
 
 For the local natural-language query path, see [docs/ask-dashboard-guide.md](docs/ask-dashboard-guide.md):
 
