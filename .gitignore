@@ -33,6 +33,7 @@ temp/
 *.mov
 *.pptx
 *.ppt
+docs/youtube-screen-recording-runbook.md
 
 # OS / editor
 .DS_Store

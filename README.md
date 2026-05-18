@@ -14,11 +14,15 @@ The repo starts with a working AWS DMS full load plus CDC demo, then extends it 
 - **Business metrics**: synthetic finance/product data for DAU, conversion, funnels, geography, devices, and payment success.
 - **Teaching material**: runbooks, diagrams, workshop flow, and article drafts.
 - **Operations**: teardown, replication lag checks, reconciliation queries, schema drift notes, and cost guidance.
-- **BI and query layer**: QuickSight dashboard design, Amazon Q topic notes, and a local catalog-backed question runner.
+- **BI and query layer**: QuickSight dashboard design, Amazon Q topic notes, a local catalog-backed question runner, and an optional OpenAI-powered operations brief.
 
 ## Architecture
 
+![RDS MySQL source to AWS DMS to RDS MySQL target architecture](assets/architecture/dms-full-load-cdc-architecture.png)
+
 ### Current runnable demo
+
+This architecture is the original AWS Summit demo foundation that the broader project builds on.
 
 ```text
 RDS MySQL source
@@ -40,6 +44,25 @@ RDS MySQL source
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the incremental build plan and diagrams.
+
+## Published Article
+
+The original AWS Summit technical walkthrough is published on AWS Builder:
+
+[Building Near Real-Time Data Pipelines with AWS DMS: Full Load + CDC](https://builder.aws.com/content/3D1dYOYynMHfhqiIRoEYV89LgSH/building-near-real-time-data-pipelines-with-aws-dms-full-load-cdc)
+
+## Videos
+
+- Original AWS Summit session demo: [Watch on YouTube](https://youtu.be/YDKte_7OkqE)
+- Full project walkthrough: coming in a separate follow-up video
+
+## Built With Codex
+
+This repo was extended from the original Summit demo into a fuller developer-facing project with Codex: schema design, scripts, dashboards, CloudFormation, debugging, documentation, and recording flow. The build notes are documented in [docs/codex-build-story.md](docs/codex-build-story.md).
+
+## OpenAI-Native Extension
+
+The optional AI Brief feature uses the OpenAI API over a bounded KPI snapshot to generate a structured health summary, risks, and next actions. It is available through `ai/openai_ops_brief.py` and the Streamlit `AI Brief` tab. See [docs/openai-ops-brief-guide.md](docs/openai-ops-brief-guide.md).
 
 ## Business Scenario
 
@@ -116,6 +139,8 @@ docs/
   ask-dashboard-guide.md      # runnable local natural-language KPI CLI
   streamlit-dashboard-guide.md
                               # browser dashboard with Ask tab
+  openai-ops-brief-guide.md   # optional OpenAI-powered summary path
+  codex-build-story.md        # how Codex was used to evolve the project
   github-publishing-checklist.md
                               # secret-safety checklist before publishing
 

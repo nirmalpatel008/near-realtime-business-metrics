@@ -4,6 +4,10 @@
 
 The runnable part of the repo is still the DMS demo. It keeps the moving pieces small:
 
+![RDS MySQL source to AWS DMS to RDS MySQL target architecture](../assets/architecture/dms-full-load-cdc-architecture.png)
+
+This is the original AWS Summit demo architecture. The broader project extends it with analytics, dashboards, and developer-facing learning material while keeping the DMS CDC foundation intact.
+
 ```text
 RDS MySQL source
   -> AWS DMS replication instance

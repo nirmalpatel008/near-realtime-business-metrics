@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from ai.ask_dashboard import load_catalog, match_question, summarize  # noqa: E402
+from ai.openai_ops_brief import collect_snapshot, connection_config as ai_connection_config, generate_brief  # noqa: E402
 
 
 st.set_page_config(
@@ -124,8 +126,8 @@ def main() -> None:
     c4.metric("GTV", money(latest_gtv))
     c5.metric("Freshness", f"{freshness_sec:.0f}s" if freshness_sec is not None else "-")
 
-    tab_overview, tab_funnel, tab_segments, tab_ask, tab_data = st.tabs(
-        ["Overview", "Funnel", "Segments", "Ask", "Data"]
+    tab_overview, tab_funnel, tab_segments, tab_ask, tab_ai_brief, tab_data = st.tabs(
+        ["Overview", "Funnel", "Segments", "Ask", "AI Brief", "Data"]
     )
 
     with tab_overview:
@@ -229,6 +231,41 @@ def main() -> None:
                 ]
             )
         )
+
+    with tab_ai_brief:
+        st.subheader("AI Operations Brief")
+        st.caption("Uses the OpenAI API over the approved KPI snapshot, not direct free-form database access.")
+        st.write("Generate a concise standup-ready summary from freshness, funnel, conversion, payment, and segment metrics.")
+        model = st.text_input("OpenAI model", value=os.getenv("OPENAI_MODEL", "gpt-5.5"))
+        if st.button("Generate AI brief"):
+            if not os.getenv("OPENAI_API_KEY"):
+                st.warning("Set OPENAI_API_KEY in your local environment or `.env` before generating a brief.")
+            else:
+                try:
+                    snapshot = collect_snapshot(
+                        ai_connection_config(
+                            host=host,
+                            user=user,
+                            password=password,
+                            database=database,
+                            port=int(port),
+                        )
+                    )
+                    brief = generate_brief(snapshot, model=model)
+                    st.metric("Health", brief.health_status.title())
+                    st.markdown(f"### {brief.headline}")
+                    for item in brief.summary:
+                        st.write(f"- {item}")
+                    if brief.risks:
+                        st.markdown("#### Risks")
+                        for risk in brief.risks:
+                            st.write(f"- {risk.title} ({risk.severity}): {risk.evidence}")
+                    st.markdown("#### Recommended Actions")
+                    for action in brief.recommended_actions:
+                        st.write(f"- {action}")
+                    st.info(brief.data_freshness_note)
+                except Exception as exc:
+                    st.error(f"Could not generate AI brief: {exc}")
 
     with tab_data:
         st.subheader("Freshness")
