@@ -7,10 +7,6 @@ The repo starts with a working AWS DMS full load plus CDC demo, then extends it 
 
 > Current implementation note: the Summit session title says Aurora to Aurora, but the runnable demo uses RDS MySQL to RDS MySQL. The pivot is documented in [WHY_NOT_AURORA.md](WHY_NOT_AURORA.md). The DMS CDC mechanics are the same for the teaching goal: MySQL binlog capture, full load, live change replication, lag measurement, and transaction consistency.
 
-## Built With Codex
-
-This repo was extended from the original Summit demo into a fuller developer-facing project with Codex: schema design, scripts, dashboards, CloudFormation, debugging, documentation, and recording flow. The build notes are documented in [docs/codex-build-story.md](docs/codex-build-story.md).
-
 ## What This Demonstrates
 
 - **CDC foundation**: AWS DMS runs a `full-load-and-cdc` task from a source RDS MySQL database.
@@ -34,6 +30,9 @@ RDS MySQL source
   -> RDS MySQL target
   -> SQL checks for lag, row counts, and transaction consistency
 ```
+## Built With Codex
+
+This repo was extended from the original Summit demo into a fuller developer-facing project with Codex: schema design, scripts, dashboards, CloudFormation, debugging, documentation, and recording flow. The build notes are documented in [docs/codex-build-story.md](docs/codex-build-story.md).
 
 ### Extended analytics architecture
 
